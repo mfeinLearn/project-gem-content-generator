@@ -2,6 +2,14 @@ from typing import Any, Dict, List
 from schemas.exercise import Exercise, ExerciseType, Difficulty
 
 
+# Canonical error categories used in this project
+# - transient: retry may help (network, rate limit)
+# - validation: bad input / schema mismatch (retry with fix)
+# - business: valid request but domain rule failed (e.g. unknown id)
+# - permission: auth / access denied (do not treat as empty success)
+ERROR_CATEGORIES = ("transient", "validation", "business", "permission")
+
+
 # ------------------------------------------------------------------
 # Structured error shape we will use everywhere (exam-aligned)
 # ------------------------------------------------------------------
@@ -15,6 +23,15 @@ def make_error(
     Standard structured error response.
     Matches the patterns tested in Domain 2 (isError, errorCategory, isRetryable).
     """
+    if error_category not in ERROR_CATEGORIES:
+        # Fail closed to a safe non-retryable validation error if mis-categorized
+        error_category = "validation"
+        is_retryable = False
+        details = {
+            **(details or {}),
+            "_note": f"Invalid error_category coerced to 'validation'. Allowed: {ERROR_CATEGORIES}",
+        }
+
     return {
         "isError": True,
         "errorCategory": error_category,
