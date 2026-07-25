@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, List
 from tools.generate import generate_exercise
 from tools.validate import validate_exercise
+from tools.review_pass2 import review_pass2
 from core.persist import save_exercise
 from core.guards import enforce_confidence_threshold
 from core.hooks import post_tool_use_hook
@@ -45,22 +46,21 @@ def run_coordinator(
     min_confidence: float = 0.7,
 ) -> Dict[str, Any]:
     """
-    Simple multi-agent coordinator.
+    Multi-agent coordinator with multi-pass review.
 
-    Pattern:
-    1. Coordinator receives the high-level goal
-    2. Optionally plans parallel specialist tasks (Task-tool pattern)
-    3. Delegates generation to the Generator specialist
-    4. Explicitly passes the generated exercise to the Validator specialist
-    5. Applies PostToolUse hooks + programmatic enforcement
-    6. Decides whether to retry (with feedback) or finish / escalate
+    Flow:
+    1. Plan parallel tasks (Task-tool pattern)
+    2. Generate
+    3. Pass 1 validate (general quality)
+    4. Pass 2 focused critic (hints / skill alignment / distractors)
+    5. Programmatic enforcement gate
+    6. Retry with feedback or escalate
     """
 
     feedback: Optional[str] = None
     last_exercise = None
     history: List[Dict[str, Any]] = []
 
-    # Demonstrate parallel Task-style planning (Domain 1 stretch)
     parallel_plan = plan_parallel_tasks(learning_goal, extra_constraints)
     print("  [Coordinator] Parallel task plan:")
     for t in parallel_plan:
@@ -70,7 +70,7 @@ def run_coordinator(
         print(f"\n=== Coordinator – Attempt {attempt}/{max_attempts} ===")
 
         # --------------------------------------------------
-        # 1. Coordinator → Generator (explicit context)
+        # 1. Generator
         # --------------------------------------------------
         print("  [Coordinator] Delegating to Generator...")
 
@@ -83,7 +83,6 @@ def run_coordinator(
         }
 
         if feedback:
-            # Explicitly pass previous failure context to the Generator
             gen_input["extra_constraints"] = (
                 f"{extra_constraints}\n\n"
                 f"IMPORTANT – Previous attempt was rejected. Fix these problems:\n{feedback}"
@@ -103,12 +102,10 @@ def run_coordinator(
         print(f"  [Generator] Produced: {exercise.get('title')}")
 
         # --------------------------------------------------
-        # 2. Coordinator → Validator (explicit context passing)
+        # 2. Pass 1 — general validation
         # --------------------------------------------------
-        print("  [Coordinator] Passing exercise to Validator...")
+        print("  [Coordinator] Passing exercise to Validator (Pass 1)...")
 
-        # Key exam concept: we explicitly pass the complete exercise.
-        # The Validator does not inherit any previous conversation.
         val_input = {
             "exercise": exercise,
             "strict_mode": True,
@@ -128,9 +125,9 @@ def run_coordinator(
         suggestions = val_result.get("suggestions", [])
         summary = val_result.get("summary", "")
 
-        print(f"  [Validator] Acceptable: {is_acceptable} | Confidence: {confidence:.2f}")
+        print(f"  [Pass1] Acceptable: {is_acceptable} | Confidence: {confidence:.2f}")
         if issues:
-            print(f"  [Validator] Issues: {issues}")
+            print(f"  [Pass1] Issues: {issues}")
 
         history.append({
             "attempt": attempt,
@@ -140,62 +137,109 @@ def run_coordinator(
             "issues": issues,
         })
 
+        if not is_acceptable:
+            feedback_parts = []
+            if issues:
+                feedback_parts.append("Pass 1 issues:\n- " + "\n- ".join(issues))
+            if suggestions:
+                feedback_parts.append("Pass 1 suggestions:\n- " + "\n- ".join(suggestions))
+            if summary:
+                feedback_parts.append(f"Pass 1 summary: {summary}")
+            feedback = "\n\n".join(feedback_parts) or "Failed Pass 1 validation."
+            print("  [Coordinator] Decision: Retry (failed Pass 1)")
+            continue
+
         # --------------------------------------------------
-        # 3. Coordinator + programmatic enforcement gate
+        # 2b. Pass 2 — focused critic (multi-pass review)
         # --------------------------------------------------
-        if is_acceptable:
-            allowed, reason = enforce_confidence_threshold(
+        print("  [Coordinator] Running Pass 2 (focused critic)...")
+        pass2 = review_pass2(exercise)
+        pass2 = post_tool_use_hook("review_pass2", {"exercise": exercise}, pass2)
+
+        if pass2.get("isError"):
+            print("  [Pass2] Failed:", pass2.get("message"))
+            feedback = pass2.get("message", "Pass 2 failed")
+            history.append({"attempt": attempt, "stage": "pass2", "result": "failed"})
+            continue
+
+        print(f"  [Pass2] Passes: {pass2.get('passes')} | Confidence: {pass2.get('confidence', 0):.2f}")
+        if pass2.get("issues"):
+            print(f"  [Pass2] Issues: {pass2.get('issues')}")
+
+        history.append({
+            "attempt": attempt,
+            "stage": "pass2",
+            "passes": pass2.get("passes"),
+            "confidence": pass2.get("confidence"),
+            "issues": pass2.get("issues", []),
+        })
+
+        if not pass2.get("passes", False):
+            feedback_parts = []
+            if pass2.get("issues"):
+                feedback_parts.append("Pass 2 issues:\n- " + "\n- ".join(pass2["issues"]))
+            if pass2.get("suggestions"):
+                feedback_parts.append("Pass 2 suggestions:\n- " + "\n- ".join(pass2["suggestions"]))
+            if pass2.get("focus_summary"):
+                feedback_parts.append(f"Pass 2 summary: {pass2['focus_summary']}")
+            feedback = "\n\n".join(feedback_parts) or "Failed focused second-pass review."
+            print("  [Coordinator] Decision: Retry (failed Pass 2)")
+            continue
+
+        # Combine confidences (take the more conservative score)
+        p2_conf = float(pass2.get("confidence", 1.0))
+        if val_result.get("exercise") is not None:
+            p1_conf = float(val_result["exercise"].get("confidence") or 0.0)
+            combined = min(p1_conf, p2_conf)
+            val_result["exercise"]["confidence"] = combined
+            confidence = combined
+            print(f"  [Coordinator] Combined confidence: {confidence:.2f}")
+
+        # --------------------------------------------------
+        # 3. Programmatic enforcement gate
+        # --------------------------------------------------
+        allowed, reason = enforce_confidence_threshold(
+            val_result["exercise"],
+            min_confidence=min_confidence,
+        )
+
+        if allowed:
+            print(f"  [Coordinator] Decision: Accept exercise ({reason})")
+
+            saved_path = save_exercise(
                 val_result["exercise"],
-                min_confidence=min_confidence,
-            )
-
-            if allowed:
-                print(f"  [Coordinator] Decision: Accept exercise ({reason})")
-
-                saved_path = save_exercise(
-                    val_result["exercise"],
-                    meta={
-                        "attempts": attempt,
-                        "learning_goal": learning_goal,
-                        "validation_summary": summary,
-                        "enforcement": reason,
-                    },
-                )
-                print(f"  [Coordinator] Saved to {saved_path}")
-
-                return {
-                    "status": "success",
+                meta={
                     "attempts": attempt,
-                    "exercise": val_result["exercise"],
+                    "learning_goal": learning_goal,
                     "validation_summary": summary,
-                    "history": history,
-                    "saved_path": str(saved_path),
-                }
-            else:
-                print(f"  [Enforcement] Blocked: {reason}")
-                # Treat as failure so we retry with feedback
-                feedback = f"Programmatic guard rejected the exercise: {reason}"
-                history.append({
-                    "attempt": attempt,
-                    "stage": "enforcement",
-                    "result": "blocked",
-                    "reason": reason,
-                })
-                continue
+                    "pass2_summary": pass2.get("focus_summary"),
+                    "enforcement": reason,
+                },
+            )
+            print(f"  [Coordinator] Saved to {saved_path}")
 
-        # Not acceptable → build feedback for next attempt
-        feedback_parts = []
-        if issues:
-            feedback_parts.append("Issues:\n- " + "\n- ".join(issues))
-        if suggestions:
-            feedback_parts.append("Suggestions:\n- " + "\n- ".join(suggestions))
-        if summary:
-            feedback_parts.append(f"Summary: {summary}")
-        feedback = "\n\n".join(feedback_parts) or "Exercise was not acceptable."
-        print("  [Coordinator] Decision: Retry with feedback")
+            return {
+                "status": "success",
+                "attempts": attempt,
+                "exercise": val_result["exercise"],
+                "validation_summary": summary,
+                "pass2_summary": pass2.get("focus_summary"),
+                "history": history,
+                "saved_path": str(saved_path),
+            }
+
+        print(f"  [Enforcement] Blocked: {reason}")
+        feedback = f"Programmatic guard rejected the exercise: {reason}"
+        history.append({
+            "attempt": attempt,
+            "stage": "enforcement",
+            "result": "blocked",
+            "reason": reason,
+        })
+        continue
 
     # --------------------------------------------------
-    # All attempts exhausted → escalate to human
+    # Escalate
     # --------------------------------------------------
     print("\n  [Coordinator] Decision: Escalate to human review")
 
