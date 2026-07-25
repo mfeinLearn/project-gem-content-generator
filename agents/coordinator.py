@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional
 from tools.generate import generate_exercise
 from tools.validate import validate_exercise
 from core.persist import save_exercise
+from core.guards import enforce_confidence_threshold
 
 
 def run_coordinator(
@@ -99,42 +100,47 @@ def run_coordinator(
         })
 
         # --------------------------------------------------
-        # 3. Coordinator decides what to do next
+        # 3. Coordinator + programmatic enforcement gate
         # --------------------------------------------------
-        if is_acceptable and confidence >= min_confidence:
-            print("  [Coordinator] Decision: Accept exercise")
-
-            # Persist the accepted exercise (Domain 5 – external state)
-            saved_path = save_exercise(
+        if is_acceptable:
+            allowed, reason = enforce_confidence_threshold(
                 val_result["exercise"],
-                meta={
-                    "attempts": attempt,
-                    "learning_goal": learning_goal,
-                    "validation_summary": summary,
-                },
+                min_confidence=min_confidence,
             )
-            print(f"  [Coordinator] Saved to {saved_path}")
 
-            return {
-                "status": "success",
-                "attempts": attempt,
-                "exercise": val_result["exercise"],
-                "validation_summary": summary,
-                "history": history,
-                "saved_path": str(saved_path),
-            }
+            if allowed:
+                print(f"  [Coordinator] Decision: Accept exercise ({reason})")
 
-        # Not good enough → prepare explicit feedback for the next Generator call
-        feedback_parts = []
-        if issues:
-            feedback_parts.append("Issues:\n- " + "\n- ".join(issues))
-        if suggestions:
-            feedback_parts.append("Suggestions:\n- " + "\n- ".join(suggestions))
-        if summary:
-            feedback_parts.append(f"Summary: {summary}")
+                saved_path = save_exercise(
+                    val_result["exercise"],
+                    meta={
+                        "attempts": attempt,
+                        "learning_goal": learning_goal,
+                        "validation_summary": summary,
+                        "enforcement": reason,
+                    },
+                )
+                print(f"  [Coordinator] Saved to {saved_path}")
 
-        feedback = "\n\n".join(feedback_parts) or "Exercise was not acceptable."
-        print("  [Coordinator] Decision: Retry with feedback")
+                return {
+                    "status": "success",
+                    "attempts": attempt,
+                    "exercise": val_result["exercise"],
+                    "validation_summary": summary,
+                    "history": history,
+                    "saved_path": str(saved_path),
+                }
+            else:
+                print(f"  [Enforcement] Blocked: {reason}")
+                # Treat as failure so we retry with feedback
+                feedback = f"Programmatic guard rejected the exercise: {reason}"
+                history.append({
+                    "attempt": attempt,
+                    "stage": "enforcement",
+                    "result": "blocked",
+                    "reason": reason,
+                })
+                continue
 
     # --------------------------------------------------
     # All attempts exhausted → escalate to human

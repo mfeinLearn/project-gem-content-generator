@@ -18,7 +18,9 @@ if __name__ == "__main__":
         exercise_type="phonics",
         extra_constraints="Make it multiple choice with 3 distractors. Use simple animal themes.",
         max_attempts=3,
-        min_confidence=0.7,
+        min_confidence=0.7, 
+        # min_confidence=0.99, # this will block
+
     )
 
     print("\n" + "=" * 50)
