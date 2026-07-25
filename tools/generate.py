@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from schemas.exercise import Exercise, EXERCISE_JSON_SCHEMA
 from tools.definitions import make_error
-
+from prompts.few_shot_examples import format_few_shot_for_prompt
 
 client = anthropic.Anthropic()
 
@@ -32,9 +32,13 @@ def generate_exercise(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         "input_schema": EXERCISE_JSON_SCHEMA,
     }
 
+    few_shot = format_few_shot_for_prompt(max_examples=2)
+
     system = f"""
 You are an expert educational content designer for young children (Project Gem).
 Create one high-quality exercise that matches the request.
+
+{few_shot}
 
 Rules:
 - Keep language simple, encouraging, and age-appropriate for grade {target_grade}.
@@ -42,6 +46,7 @@ Rules:
 - If the type supports multiple choice, provide 3 good distractors.
 - Fill learning_objective clearly.
 - Do not invent scary or inappropriate themes.
+- Follow the style and quality of the examples above.
 - You MUST call the submit_exercise tool with the complete exercise. Do not reply with free text.
 """.strip()
 

@@ -24,6 +24,25 @@ def make_error(
     }
 
 
+def simple_error(
+    message: str,
+    error_category: str = "validation",
+    is_retryable: bool = False,
+) -> Dict[str, Any]:
+    """
+    Convenience helper for the common case where all we have is a message.
+
+    Delegates to make_error so the error shape stays defined in exactly one place.
+    Defaults to a non-retryable validation error, which is the safe choice for an
+    unclassified failure: it will not trigger a retry loop.
+    """
+    return make_error(
+        message=message,
+        error_category=error_category,
+        is_retryable=is_retryable,
+    )
+
+
 # ------------------------------------------------------------------
 # Tool 1: generate_exercise
 # ------------------------------------------------------------------

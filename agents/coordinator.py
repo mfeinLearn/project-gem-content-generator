@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
 from tools.generate import generate_exercise
 from tools.validate import validate_exercise
+from core.persist import save_exercise
 
 
 def run_coordinator(
@@ -102,12 +103,25 @@ def run_coordinator(
         # --------------------------------------------------
         if is_acceptable and confidence >= min_confidence:
             print("  [Coordinator] Decision: Accept exercise")
+
+            # Persist the accepted exercise (Domain 5 – external state)
+            saved_path = save_exercise(
+                val_result["exercise"],
+                meta={
+                    "attempts": attempt,
+                    "learning_goal": learning_goal,
+                    "validation_summary": summary,
+                },
+            )
+            print(f"  [Coordinator] Saved to {saved_path}")
+
             return {
                 "status": "success",
                 "attempts": attempt,
                 "exercise": val_result["exercise"],
                 "validation_summary": summary,
                 "history": history,
+                "saved_path": str(saved_path),
             }
 
         # Not good enough → prepare explicit feedback for the next Generator call
