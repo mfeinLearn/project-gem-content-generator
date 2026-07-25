@@ -23,9 +23,7 @@ def generate_exercise(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     exercise_type = tool_input.get("exercise_type", "phonics")
     extra_constraints = tool_input.get("extra_constraints", "")
 
-    # We ask Claude to call a special "submit_exercise" tool whose input_schema
-    # is exactly our Exercise schema. This is the cleanest way to get reliable
-    # structured output (Domain 4 best practice).
+    # Forced structured output tool (Domain 4)
     submit_tool = {
         "name": "submit_exercise",
         "description": "Submit the final educational exercise. You must call this tool with a complete, valid exercise.",
@@ -34,20 +32,32 @@ def generate_exercise(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
     few_shot = format_few_shot_for_prompt(max_examples=2)
 
+    # Critical rules placed at TOP and BOTTOM to mitigate lost-in-the-middle
+    critical_rules = f"""
+CRITICAL RULES (must follow):
+1. Age-appropriate for grade {target_grade} only.
+2. Correct answer must be unambiguous.
+3. If multiple choice, provide exactly 3 plausible distractors.
+4. Do not give away the answer in the prompt or early hints.
+5. You MUST call the submit_exercise tool — no free-text final answer.
+""".strip()
+
     system = f"""
 You are an expert educational content designer for young children (Project Gem).
+
+{critical_rules}
+
 Create one high-quality exercise that matches the request.
 
 {few_shot}
 
-Rules:
-- Keep language simple, encouraging, and age-appropriate for grade {target_grade}.
-- The correct answer must be unambiguous.
-- If the type supports multiple choice, provide 3 good distractors.
+Additional guidance:
+- Keep language simple and encouraging.
 - Fill learning_objective clearly.
-- Do not invent scary or inappropriate themes.
+- No scary or inappropriate themes.
 - Follow the style and quality of the examples above.
-- You MUST call the submit_exercise tool with the complete exercise. Do not reply with free text.
+
+{critical_rules}
 """.strip()
 
     user_content = f"""
@@ -66,17 +76,15 @@ Create an exercise with these requirements:
             max_tokens=2048,
             system=system,
             tools=[submit_tool],
-            tool_choice={"type": "tool", "name": "submit_exercise"},  # force the structured tool
+            tool_choice={"type": "tool", "name": "submit_exercise"},  # forced tool selection
             messages=[{"role": "user", "content": user_content}],
         )
 
-        # Extract the tool call
         for block in response.content:
             if block.type == "tool_use" and block.name == "submit_exercise":
                 raw = block.input
                 try:
                     exercise = Exercise.model_validate(raw)
-                    # Start with a reasonable confidence; validation step can adjust it
                     if exercise.confidence is None:
                         exercise.confidence = 0.75
                     return {

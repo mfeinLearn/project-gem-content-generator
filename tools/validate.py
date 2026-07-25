@@ -26,7 +26,6 @@ def validate_exercise(tool_input: Dict[str, Any]) -> Dict[str, Any]:
             is_retryable=False,
         )
 
-    # First, make sure it still matches our schema
     try:
         exercise = Exercise.model_validate(raw_exercise)
     except ValidationError as e:
@@ -37,9 +36,19 @@ def validate_exercise(tool_input: Dict[str, Any]) -> Dict[str, Any]:
             details={"pydantic_errors": e.errors()},
         )
 
-    # Ask Claude to critique it against clear criteria
-    system = """
+    critical_rules = """
+CRITICAL RULES (must follow):
+1. Judge age-appropriateness for the stated target_grade only.
+2. The correct_answer must be unambiguous and actually correct.
+3. Flag prompts or early hints that give away the answer.
+4. Respond with JSON only, using the required shape — no free-text outside JSON.
+""".strip()
+
+    system = f"""
 You are a strict but fair educational content reviewer for a children's learning game (ages ~5–12).
+
+{critical_rules}
+
 Evaluate the exercise on these criteria:
 
 1. Age-appropriateness for the stated target_grade
@@ -48,16 +57,21 @@ Evaluate the exercise on these criteria:
 4. Quality of distractors (if present) — are they plausible but clearly wrong?
 5. Educational value of the learning_objective
 6. Overall tone (encouraging, never scary or inappropriate)
+7. Does the exercise actually test the intended skill, or does it give away the answer?
+
+Strict mode is currently: {strict_mode}
 
 Respond with a JSON object only, using this shape:
-{
+{{
   "is_acceptable": true/false,
   "confidence": 0.0-1.0,
   "needs_human_review": true/false,
   "issues": ["list of specific problems"],
   "suggestions": ["list of concrete improvements"],
   "summary": "one sentence overall assessment"
-}
+}}
+
+{critical_rules}
 """.strip()
 
     user_content = f"""
@@ -75,17 +89,14 @@ Exercise to review:
             messages=[{"role": "user", "content": user_content}],
         )
 
-        # Very simple extraction (in production you would also force a tool here)
         text = ""
         for block in response.content:
             if block.type == "text":
                 text += block.text
 
-        # Try to parse the JSON the model returned
         import json
         import re
 
-        # Extract the first JSON object we find
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             return make_error(
@@ -97,7 +108,6 @@ Exercise to review:
 
         review = json.loads(match.group(0))
 
-        # Update the exercise with validation results
         exercise.confidence = float(review.get("confidence", 0.5))
         exercise.needs_human_review = bool(review.get("needs_human_review", False))
         exercise.validation_notes = review.get("summary", "")

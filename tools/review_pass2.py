@@ -36,8 +36,17 @@ def review_pass2(exercise: Dict[str, Any]) -> Dict[str, Any]:
         "input_schema": PASS2_SCHEMA,
     }
 
-    system = """
+    critical_rules = """
+CRITICAL RULES (must follow):
+1. Only evaluate hint leakage, skill alignment, and distractor quality.
+2. Do NOT re-check basic grammar, tone, or schema (Pass 1 already did that).
+3. You MUST call submit_pass2_review — no free-text final answer.
+""".strip()
+
+    system = f"""
 You are a strict second-pass reviewer for children's educational exercises.
+
+{critical_rules}
 
 ONLY evaluate these three things:
 1. Hint leakage — do any hints effectively reveal the correct answer?
@@ -46,7 +55,7 @@ ONLY evaluate these three things:
 
 Do NOT re-check basic grammar, tone, or schema. That was Pass 1.
 
-You MUST call submit_pass2_review. No free text.
+{critical_rules}
 """.strip()
 
     user_content = f"""
