@@ -82,29 +82,47 @@ project-gem-content-generator/
 
 ## Exam Domain Coverage (Primary Focus of This Project)
 
-| Domain | Weight | Coverage by this project | Notes |
-|--------|--------|---------------------------|-------|
-| 1. Agentic Architecture & Orchestration | 27% | Moderate → Strong (once multi-agent) | Agentic loop, later coordinator + subagents, explicit context passing, iterative refinement |
-| 2. Tool Design & MCP Integration | 18% | Strong | Clear tool descriptions, structured errors, tool_choice, possible MCP later |
-| 3. Claude Code Configuration & Workflows | 20% | Minimal | Will be covered in a follow-up exercise on the real `project-gem-web` repo |
-| 4. Prompt Engineering & Structured Output | 20% | Excellent | JSON Schema + tool_use, few-shot, validation-retry, nullable fields |
-| 5. Context Management & Reliability | 15% | Very Strong | Escalation, confidence scoring, fact persistence, structured errors |
+| Domain                                    | Weight | Coverage by this project             | Notes                                                                                       |
+| ----------------------------------------- | ------ | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| 1. Agentic Architecture & Orchestration   | 27%    | Moderate → Strong (once multi-agent) | Agentic loop, later coordinator + subagents, explicit context passing, iterative refinement |
+| 2. Tool Design & MCP Integration          | 18%    | Strong                               | Clear tool descriptions, structured errors, tool_choice, possible MCP later                 |
+| 3. Claude Code Configuration & Workflows  | 20%    | Minimal                              | Will be covered in a follow-up exercise on the real `project-gem-web` repo                  |
+| 4. Prompt Engineering & Structured Output | 20%    | Excellent                            | JSON Schema + tool_use, few-shot, validation-retry, nullable fields                         |
+| 5. Context Management & Reliability       | 15%    | Very Strong                          | Escalation, confidence scoring, fact persistence, structured errors                         |
 
-## Current Status (as of 2026-07-24)
+## Current Status (as of 2026-07-24 evening)
 
-- Project concept and exam mapping agreed.
+**Completed:**
+
+- Project concept and exam mapping agreed
 - Excel tracker created: `CCA-F_Game_Content_Generator_Tracker.xlsx`
-- Tech choices confirmed (Python + official anthropic SDK).
-- Ready to begin implementation starting with:
-  1. Exercise JSON Schema (`schemas/exercise.py`)
-  2. Tool definitions + descriptions + error shapes
-  3. Single-agent system prompt + agentic loop
-  4. Validation-retry + confidence + escalation
-  5. (Stretch) Multi-agent expansion
+- Tech choices confirmed (Python + official anthropic SDK)
+- `schemas/exercise.py` — full Pydantic Exercise model + JSON Schema
+- `tools/definitions.py` — tool definitions + structured error helper
+- `tools/generate.py` — real generation using forced `tool_use` + Exercise schema
+- `tools/validate.py` — real validation with confidence + `needs_human_review`
+- `prompts/system_single.py` — system prompt with explicit escalation criteria
+- `core/loop.py` — classic agentic loop using `stop_reason`
+- `main.py` — entry point
+- Supporting files: README.md, requirements.txt, .gitignore, .env.example
+
+**In progress / next up:**
+
+- End-to-end testing of the current single-agent flow
+- Improve validation to also use forced structured output (instead of regex JSON parsing)
+- Add automatic retry loop when validation fails or confidence is low
+- Polish confidence scoring and human escalation path
+- Generate a small pack of real sample exercises
+
+**Later:**
+
+- Expand to multi-agent (Coordinator + Generator + Validator) with explicit context passing
+- Domain 3 exercise: Claude Code configuration on the real `project-gem-web` repo
 
 ## Key Checklist Items This Project Intentionally Hits
 
 **High priority for this project:**
+
 - 4.3 / 4.4 – Structured output via tool_use + JSON Schema (required/optional/nullable, enums)
 - 4.1 / 4.2 – Explicit criteria + few-shot examples
 - 4.6 / 4.7 – Validation → retry-with-error-feedback
@@ -115,6 +133,7 @@ project-gem-content-generator/
 - 1.3–1.6 (later) – Multi-agent coordinator pattern with explicit context passing
 
 **Intentionally deferred (Domain 3):**
+
 - CLAUDE.md hierarchy, `.claude/rules/`, slash commands, skills, plan mode, CI integration  
   → These will be done as a separate short exercise on the real `project-gem-web` codebase after this generator is working.
 
@@ -127,11 +146,14 @@ project-gem-content-generator/
 - Keep tools focused and non-overlapping.
 - When we move to multi-agent, always pass complete relevant findings in the prompt (subagents do not inherit context automatically).
 
-## Next Immediate Step
+## Next Immediate Steps
 
-Create the core **Exercise JSON Schema** (Pydantic models) in `schemas/exercise.py`.  
-This is the foundation for structured output (checklist items 4.3 and 4.4).
+1. Test the current end-to-end flow (`python main.py`) and fix any bugs.
+2. Improve `validate_exercise` to use forced structured output (tool_use) instead of regex parsing.
+3. Add automatic retry logic: if validation fails or confidence is low → regenerate with feedback.
+4. Generate a small set of real sample exercises for Project Gem.
+5. (Afterwards) Expand to multi-agent architecture.
 
 ---
 
-*This file exists so that any future Claude session or Claude Code instance has the full context of what we are building and why.*
+_This file exists so that any future Claude session or Claude Code instance has the full context of what we are building and why._

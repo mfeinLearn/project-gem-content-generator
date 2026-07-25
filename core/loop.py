@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 
 import anthropic
 from tools.definitions import TOOLS, make_error
+from tools.generate import generate_exercise
+from tools.validate import validate_exercise
 from prompts.system_single import SYSTEM_PROMPT
 
 
@@ -66,22 +68,11 @@ def run_agentic_loop(
 
                 print(f"  → Tool call: {tool_name}")
 
-                # --------------------------------------------------
-                # Tool execution (we will flesh this out in next steps)
-                # For now we return a structured placeholder
-                # --------------------------------------------------
+                # Real tool execution
                 if tool_name == "generate_exercise":
-                    result = {
-                        "status": "generated_placeholder",
-                        "note": "Real generation logic will be added next",
-                        "input_received": tool_input,
-                    }
+                    result = generate_exercise(tool_input)
                 elif tool_name == "validate_exercise":
-                    result = {
-                        "status": "validated_placeholder",
-                        "note": "Real validation logic will be added next",
-                        "input_received": tool_input,
-                    }
+                    result = validate_exercise(tool_input)
                 else:
                     result = make_error(
                         message=f"Unknown tool: {tool_name}",
@@ -100,7 +91,6 @@ def run_agentic_loop(
                 "role": "user",
                 "content": tool_results
             })
-
         else:
             # Unexpected stop reason
             return {
