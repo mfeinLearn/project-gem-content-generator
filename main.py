@@ -1,9 +1,9 @@
 from dotenv import load_dotenv
-load_dotenv()  # Must be first — before any module that creates an Anthropic client
+load_dotenv()
 
 import os
 import json
-from core.retry import run_generate_with_retry
+from agents.coordinator import run_coordinator
 
 api_key = os.getenv("ANTHROPIC_API_KEY")
 if not api_key:
@@ -11,7 +11,7 @@ if not api_key:
 
 
 if __name__ == "__main__":
-    result = run_generate_with_retry(
+    result = run_coordinator(
         learning_goal="short 'a' sound in CVC words",
         target_grade=1,
         difficulty="medium",
