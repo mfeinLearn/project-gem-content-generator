@@ -44,6 +44,7 @@ def run_coordinator(
     extra_constraints: str = "",
     max_attempts: int = 3,
     min_confidence: float = 0.7,
+    adaptive: bool = True,  # False = always full sequential pipeline
 ) -> Dict[str, Any]:
     """
     Multi-agent coordinator with multi-pass review.
@@ -52,9 +53,13 @@ def run_coordinator(
     1. Plan parallel tasks (Task-tool pattern)
     2. Generate
     3. Pass 1 validate (general quality)
-    4. Pass 2 focused critic (hints / skill alignment / distractors)
+    4. Pass 2 focused critic (unless adaptive skip)
     5. Programmatic enforcement gate
     6. Retry with feedback or escalate
+
+    Pipeline modes:
+    - adaptive=True  → may skip Pass 2 when Pass 1 confidence is already very high
+    - adaptive=False → always run the full sequential pipeline
     """
 
     feedback: Optional[str] = None
@@ -65,6 +70,8 @@ def run_coordinator(
     print("  [Coordinator] Parallel task plan:")
     for t in parallel_plan:
         print(f"    - {t['subagent']}: {t['prompt'][:80]}...")
+
+    print(f"  [Coordinator] Pipeline mode: {'adaptive' if adaptive else 'fixed sequential'}")
 
     for attempt in range(1, max_attempts + 1):
         print(f"\n=== Coordinator – Attempt {attempt}/{max_attempts} ===")
@@ -150,50 +157,77 @@ def run_coordinator(
             continue
 
         # --------------------------------------------------
-        # 2b. Pass 2 — focused critic (multi-pass review)
+        # Pipeline choice: fixed sequential vs adaptive
         # --------------------------------------------------
-        print("  [Coordinator] Running Pass 2 (focused critic)...")
-        pass2 = review_pass2(exercise)
-        pass2 = post_tool_use_hook("review_pass2", {"exercise": exercise}, pass2)
+        # Fixed sequential: always run Pass 2.
+        # Adaptive: skip Pass 2 when Pass 1 is already very strong.
+        run_pass2 = True
+        if adaptive and is_acceptable and confidence >= 0.95:
+            run_pass2 = False
+            print("  [Coordinator] Adaptive path: skipping Pass 2 (Pass 1 confidence >= 0.95)")
+            history.append({
+                "attempt": attempt,
+                "stage": "pipeline",
+                "mode": "adaptive_skip_pass2",
+                "pass1_confidence": confidence,
+            })
+        else:
+            history.append({
+                "attempt": attempt,
+                "stage": "pipeline",
+                "mode": "sequential_full" if not adaptive else "adaptive_full",
+            })
 
-        if pass2.get("isError"):
-            print("  [Pass2] Failed:", pass2.get("message"))
-            feedback = pass2.get("message", "Pass 2 failed")
-            history.append({"attempt": attempt, "stage": "pass2", "result": "failed"})
-            continue
+        pass2_summary = "skipped_adaptive"
 
-        print(f"  [Pass2] Passes: {pass2.get('passes')} | Confidence: {pass2.get('confidence', 0):.2f}")
-        if pass2.get("issues"):
-            print(f"  [Pass2] Issues: {pass2.get('issues')}")
+        if run_pass2:
+            # --------------------------------------------------
+            # 2b. Pass 2 — focused critic (multi-pass review)
+            # --------------------------------------------------
+            print("  [Coordinator] Running Pass 2 (focused critic)...")
+            pass2 = review_pass2(exercise)
+            pass2 = post_tool_use_hook("review_pass2", {"exercise": exercise}, pass2)
 
-        history.append({
-            "attempt": attempt,
-            "stage": "pass2",
-            "passes": pass2.get("passes"),
-            "confidence": pass2.get("confidence"),
-            "issues": pass2.get("issues", []),
-        })
+            if pass2.get("isError"):
+                print("  [Pass2] Failed:", pass2.get("message"))
+                feedback = pass2.get("message", "Pass 2 failed")
+                history.append({"attempt": attempt, "stage": "pass2", "result": "failed"})
+                continue
 
-        if not pass2.get("passes", False):
-            feedback_parts = []
+            print(f"  [Pass2] Passes: {pass2.get('passes')} | Confidence: {pass2.get('confidence', 0):.2f}")
             if pass2.get("issues"):
-                feedback_parts.append("Pass 2 issues:\n- " + "\n- ".join(pass2["issues"]))
-            if pass2.get("suggestions"):
-                feedback_parts.append("Pass 2 suggestions:\n- " + "\n- ".join(pass2["suggestions"]))
-            if pass2.get("focus_summary"):
-                feedback_parts.append(f"Pass 2 summary: {pass2['focus_summary']}")
-            feedback = "\n\n".join(feedback_parts) or "Failed focused second-pass review."
-            print("  [Coordinator] Decision: Retry (failed Pass 2)")
-            continue
+                print(f"  [Pass2] Issues: {pass2.get('issues')}")
 
-        # Combine confidences (take the more conservative score)
-        p2_conf = float(pass2.get("confidence", 1.0))
-        if val_result.get("exercise") is not None:
-            p1_conf = float(val_result["exercise"].get("confidence") or 0.0)
-            combined = min(p1_conf, p2_conf)
-            val_result["exercise"]["confidence"] = combined
-            confidence = combined
-            print(f"  [Coordinator] Combined confidence: {confidence:.2f}")
+            history.append({
+                "attempt": attempt,
+                "stage": "pass2",
+                "passes": pass2.get("passes"),
+                "confidence": pass2.get("confidence"),
+                "issues": pass2.get("issues", []),
+            })
+
+            if not pass2.get("passes", False):
+                feedback_parts = []
+                if pass2.get("issues"):
+                    feedback_parts.append("Pass 2 issues:\n- " + "\n- ".join(pass2["issues"]))
+                if pass2.get("suggestions"):
+                    feedback_parts.append("Pass 2 suggestions:\n- " + "\n- ".join(pass2["suggestions"]))
+                if pass2.get("focus_summary"):
+                    feedback_parts.append(f"Pass 2 summary: {pass2['focus_summary']}")
+                feedback = "\n\n".join(feedback_parts) or "Failed focused second-pass review."
+                print("  [Coordinator] Decision: Retry (failed Pass 2)")
+                continue
+
+            # Combine confidences (take the more conservative score)
+            p2_conf = float(pass2.get("confidence", 1.0))
+            if val_result.get("exercise") is not None:
+                p1_conf = float(val_result["exercise"].get("confidence") or 0.0)
+                combined = min(p1_conf, p2_conf)
+                val_result["exercise"]["confidence"] = combined
+                confidence = combined
+                print(f"  [Coordinator] Combined confidence: {confidence:.2f}")
+
+            pass2_summary = pass2.get("focus_summary")
 
         # --------------------------------------------------
         # 3. Programmatic enforcement gate
@@ -212,8 +246,9 @@ def run_coordinator(
                     "attempts": attempt,
                     "learning_goal": learning_goal,
                     "validation_summary": summary,
-                    "pass2_summary": pass2.get("focus_summary"),
+                    "pass2_summary": pass2_summary,
                     "enforcement": reason,
+                    "pipeline": "adaptive" if adaptive else "sequential",
                 },
             )
             print(f"  [Coordinator] Saved to {saved_path}")
@@ -223,7 +258,7 @@ def run_coordinator(
                 "attempts": attempt,
                 "exercise": val_result["exercise"],
                 "validation_summary": summary,
-                "pass2_summary": pass2.get("focus_summary"),
+                "pass2_summary": pass2_summary,
                 "history": history,
                 "saved_path": str(saved_path),
             }
